@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROI 灰度分析工具</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      color: #1f2937;
+      background: #f3f4f6;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    .card {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+      background: #ffffff;
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 24px;
+    }
+
+    .tip {
+      margin: 0 0 18px;
+      color: #6b7280;
+      line-height: 1.6;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    button {
+      padding: 9px 14px;
+      color: #ffffff;
+      background: #2563eb;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    button:disabled {
+      background: #9ca3af;
+      cursor: not-allowed;
+    }
+
+    #canvasWrap {
+      display: inline-block;
+      max-width: 100%;
+      overflow: auto;
+      border: 1px solid #d1d5db;
+      background: #111827;
+      border-radius: 10px;
+    }
+
+    canvas {
+      display: block;
+      cursor: crosshair;
+      max-width: none;
+    }
+
+    .result {
+      margin-top: 18px;
+      padding: 16px;
+      line-height: 1.9;
+      background: #eff6ff;
+      border-left: 4px solid #2563eb;
+      border-radius: 8px;
+    }
+
+    .result strong {
+      color: #1d4ed8;
+    }
+
+    .empty {
+      color: #6b7280;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <h1>ROI 灰度分析工具</h1>
+
+    <p class="tip">
+      选择图片后，在图像上按住鼠标左键拖动以框选 ROI。
+      系统会自动计算该区域的平均灰度、最小灰度、最大灰度及像素数量。
+    </p>
+
+    <div class="toolbar">
+      <input id="imageInput" type="file" accept="image/*" />
+      <button id="clearBtn" type="button" disabled>清除 ROI</button>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="result" class="result">
+      <span class="empty">请先选择一张图片，再拖动鼠标框选 ROI。</span>
+    </div>
+  </main>
+
+  <script>
+    const imageInput = document.getElementById("imageInput");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const clearBtn = document.getElementById("clearBtn");
+    const result = document.getElementById("result");
+
+    let image = null;
+    let imageData = null;
+
+    let isDrawing = false;
+    let startX = 0;
+    let startY = 0;
+    let currentX = 0;
+    let currentY = 0;
+
+    function showResult(message) {
+      result.innerHTML = message;
+    }
+
+    function getCanvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+
+      return {
+        x: Math.floor((event.clientX - rect.left) * canvas.width / rect.width),
+        y: Math.floor((event.clientY - rect.top) * canvas.height / rect.height)
+      };
+    }
+
+    function redrawImage() {
+      if (!image) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0);
+    }
+
+    function getNormalizedROI() {
+      const x = Math.max(0, Math.min(startX, currentX));
+      const y = Math.max(0, Math.min(startY, currentY));
+      const width = Math.min(canvas.width - x, Math.abs(currentX - startX));
+      const height = Math.min(canvas.height - y, Math.abs(currentY - startY));
+
+      return {
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: Math.floor(width),
+        height: Math.floor(height)
+      };
+    }
+
+    function drawROI() {
+      redrawImage();
+
+      const roi = getNormalizedROI();
+
+      if (roi.width < 1 || roi.height < 1) return;
+
+      ctx.save();
+      ctx.strokeStyle = "#ff2d2d";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 4]);
+      ctx.strokeRect(roi.x, roi.y, roi.width, roi.height);
+
+      ctx.fillStyle = "rgba(255, 45, 45, 0.12)";
+      ctx.fillRect(roi.x, roi.y, roi.width, roi.height);
+      ctx.restore();
+    }
+
+    function calculateGrayROI() {
+      const roi = getNormalizedROI();
+
+      if (roi.width < 1 || roi.height < 1 || !imageData) {
+        showResult("<span class='empty'>ROI 太小，请重新框选。</span>");
+        return;
+      }
+
+      let sumGray = 0;
+      let minGray = 255;
+      let maxGray = 0;
+      let pixelCount = 0;
+
+      const data = imageData.data;
+      const imageWidth = canvas.width;
+
+      for (let y = roi.y; y < roi.y + roi.height; y++) {
+        for (let x = roi.x; x < roi.x + roi.width; x++) {
+          const index = (y * imageWidth + x) * 4;
+
+          const r = data[index];
+          const g = data[index + 1];
+          const b = data[index + 2];
+
+          // 标准亮度灰度转换：Rec. 709
+          const gray = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+          sumGray += gray;
+          minGray = Math.min(minGray, gray);
+          maxGray = Math.max(maxGray, gray);
+          pixelCount++;
+        }
+      }
+
+      const meanGray = sumGray / pixelCount;
+
+      showResult(`
+        <div><strong>ROI 坐标：</strong>x=${roi.x}, y=${roi.y}</div>
+        <div><strong>ROI 尺寸：</strong>${roi.width} × ${roi.height} px</div>
+        <div><strong>像素数量：</strong>${pixelCount}</div>
+        <div><strong>平均灰度值：</strong>${meanGray.toFixed(2)} / 255</div>
+        <div><strong>最小灰度值：</strong>${minGray.toFixed(2)} / 255</div>
+        <div><strong>最大灰度值：</strong>${maxGray.toFixed(2)} / 255</div>
+      `);
+    }
+
+    imageInput.addEventListener("change", (event) => {
+      const file = event.target.files[0];
+
+      if (!file) return;
+
+      const reader = new FileReader();
+
+      reader.onload = (loadEvent) => {
+        image = new Image();
+
+        image.onload = () => {
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+
+          redrawImage();
+          imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+          clearBtn.disabled = false;
+
+          showResult(`
+            <div><strong>图片已加载。</strong></div>
+            <div>图片尺寸：${canvas.width} × ${canvas.height} px</div>
+            <div>请在图片上拖动鼠标框选 ROI。</div>
+          `);
+        };
+
+        image.src = loadEvent.target.result;
+      };
+
+      reader.readAsDataURL(file);
+    });
+
+    canvas.addEventListener("mousedown", (event) => {
+      if (!image) return;
+
+      const point = getCanvasPoint(event);
+
+      isDrawing = true;
+      startX = point.x;
+      startY = point.y;
+      currentX = point.x;
+      currentY = point.y;
+    });
+
+    canvas.addEventListener("mousemove", (event) => {
+      if (!isDrawing || !image) return;
+
+      const point = getCanvasPoint(event);
+
+      currentX = point.x;
+      currentY = point.y;
+
+      drawROI();
+    });
+
+    window.addEventListener("mouseup", (event) => {
+      if (!isDrawing || !image) return;
+
+      isDrawing = false;
+
+      const point = getCanvasPoint(event);
+      currentX = Math.max(0, Math.min(canvas.width, point.x));
+      currentY = Math.max(0, Math.min(canvas.height, point.y));
+
+      drawROI();
+      calculateGrayROI();
+    });
+
+    clearBtn.addEventListener("click", () => {
+      if (!image) return;
+
+      redrawImage();
+
+      showResult(
+        "<span class='empty'>ROI 已清除，请重新拖动鼠标框选区域。</span>"
+      );
+    });
+  </script>
+</body>
+</html>
